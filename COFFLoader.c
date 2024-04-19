@@ -213,9 +213,6 @@ int RunCOFF(char* functionname, unsigned char* coff_data, uint32_t filesize, uns
     char* functionMapping = NULL;
     int functionMappingCount = 0;
 #endif
-#ifdef DEBUG
-    int *sectionSize = NULL;
-#endif
 
     if (coff_data == NULL) {
         DEBUG_PRINT("Can't execute NULL\n");
@@ -237,9 +234,9 @@ int RunCOFF(char* functionname, unsigned char* coff_data, uint32_t filesize, uns
     int relocationCount = 0;
     char** sectionMapping = NULL;
     sectionMapping = (char**)calloc(sizeof(char*)*(coff_header_ptr->NumberOfSections+1), 1);
-#ifdef DEBUG
+    int *sectionSize = NULL;
     sectionSize = (int*)calloc(sizeof(int)*(coff_header_ptr->NumberOfSections+1), 1);
-#endif
+
     if (sectionMapping == NULL){
         DEBUG_PRINT("Failed to allocate sectionMapping\n");
         goto cleanup;
@@ -265,14 +262,11 @@ int RunCOFF(char* functionname, unsigned char* coff_data, uint32_t filesize, uns
         DEBUG_PRINT("Characteristics: %x\n", coff_sect_ptr->Characteristics);
 #ifdef _WIN32
         DEBUG_PRINT("Allocating 0x%x bytes\n", coff_sect_ptr->VirtualSize);
-        /* NOTE: Might want to allocate as PAGE_READWRITE and VirtualProtect
-         * before execution to either PAGE_READWRITE or PAGE_EXECUTE_READ
-         * depending on the Section Characteristics. Parse them all again
-         * before running and set the memory permissions. */
-        sectionMapping[counter] = VirtualAlloc(NULL, coff_sect_ptr->SizeOfRawData, MEM_COMMIT | MEM_RESERVE | MEM_TOP_DOWN, PAGE_EXECUTE_READWRITE);
-#ifdef DEBUG
+        
+        // VirtualAlloc PAGE_READWRITE to avoir RWX memory regions.
+        sectionMapping[counter] = VirtualAlloc(NULL, coff_sect_ptr->SizeOfRawData, MEM_COMMIT | MEM_RESERVE | MEM_TOP_DOWN, PAGE_READWRITE);
         sectionSize[counter] = coff_sect_ptr->SizeOfRawData;
-#endif
+
         if (sectionMapping[counter] == NULL) {
             DEBUG_PRINT("Failed to allocate memory\n");
         }
@@ -290,9 +284,9 @@ int RunCOFF(char* functionname, unsigned char* coff_data, uint32_t filesize, uns
     /* Actually allocate enough for worst case every relocation, may not be needed, but hey better safe than sorry */
 #ifdef _WIN32
 #ifdef _WIN64
-    functionMapping = VirtualAlloc(NULL, relocationCount*8, MEM_COMMIT | MEM_RESERVE | MEM_TOP_DOWN, PAGE_EXECUTE_READWRITE);
+    functionMapping = VirtualAlloc(NULL, relocationCount*8, MEM_COMMIT | MEM_RESERVE | MEM_TOP_DOWN, PAGE_READWRITE);
 #else
-    functionMapping = VirtualAlloc(NULL, relocationCount*8, MEM_COMMIT | MEM_RESERVE | MEM_TOP_DOWN, PAGE_EXECUTE_READWRITE);
+    functionMapping = VirtualAlloc(NULL, relocationCount*8, MEM_COMMIT | MEM_RESERVE | MEM_TOP_DOWN, PAGE_READWRITE);
 #endif
     if (functionMapping == NULL){
         DEBUG_PRINT("Failed to allocate functionMapping\n");
@@ -591,6 +585,10 @@ int RunCOFF(char* functionname, unsigned char* coff_data, uint32_t filesize, uns
         DEBUG_PRINT("\t%s: Section: %d, Value: 0x%X\n", coff_sym_ptr[tempcounter].first.Name, coff_sym_ptr[tempcounter].SectionNumber, coff_sym_ptr[tempcounter].Value);
         if (strcmp(coff_sym_ptr[tempcounter].first.Name, entryfuncname) == 0) {
             DEBUG_PRINT("\t\tFound entry!\n");
+
+            // VirtualProtect PAGE_EXECUTE_READ the section where the actual function to exec is located.
+            DWORD oldProtection=0;
+            VirtualProtect(sectionMapping[coff_sym_ptr[tempcounter].SectionNumber - 1], sectionSize[coff_sym_ptr[tempcounter].SectionNumber - 1], PAGE_EXECUTE_READ, &oldProtection);
 #ifdef _WIN32
             /* So for some reason VS 2017 doesn't like this, but char* casting works, so just going to do that */
 #ifdef _MSC_VER
@@ -619,12 +617,10 @@ int RunCOFF(char* functionname, unsigned char* coff_data, uint32_t filesize, uns
                 free(sectionMapping);
                 sectionMapping = NULL;
             }
-#ifdef DEBUG
             if (sectionSize){
                 free(sectionSize);
                 sectionSize = NULL;
             }
-#endif
 #ifdef _WIN32
             if (functionMapping){
                 VirtualFree(functionMapping, 0, MEM_RELEASE);
