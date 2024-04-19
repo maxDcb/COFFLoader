@@ -13,6 +13,8 @@
 #if defined(_WIN32)
 #include <windows.h>
 #include "beacon_compatibility.h"
+#else
+unsigned char* InternalFunctions[30][2];
 #endif
 
 #include "COFFLoader.h"
@@ -105,7 +107,7 @@ unsigned char* getContents(char* filepath, uint32_t* outsize) {
     return buffer;
 }
 
-static BOOL starts_with(const char* string, const char* substring) {
+static int starts_with(const char* string, const char* substring) {
     return strncmp(string, substring, strlen(substring)) == 0;
 }
 
@@ -202,19 +204,17 @@ int RunCOFF(char* functionname, unsigned char* coff_data, uint32_t filesize, uns
     }
     (void)sprintf(entryfuncname, "_%s", functionname);
 #endif
+#ifdef _WIN32
     HMODULE kern = GetModuleHandleA("kernel32.dll");
     InternalFunctions[29][1] = (unsigned char *) GetProcAddress(kern, "__C_specific_handler");
     DEBUG_PRINT("found address of %x\n", InternalFunctions[29][1]);
-#ifdef _WIN32
     /* NOTE: I just picked a size, look to see what is max/normal. */
-    char** sectionMapping = NULL;
-#ifdef DEBUG
-    int *sectionSize = NULL;
-#endif
     void(*foo)(char* in, unsigned long datalen);
     char* functionMapping = NULL;
     int functionMappingCount = 0;
-    int relocationCount = 0;
+#endif
+#ifdef DEBUG
+    int *sectionSize = NULL;
 #endif
 
     if (coff_data == NULL) {
@@ -234,6 +234,8 @@ int RunCOFF(char* functionname, unsigned char* coff_data, uint32_t filesize, uns
     DEBUG_PRINT("Characteristics: %d\n", coff_header_ptr->Characteristics);
     DEBUG_PRINT("\n");
     /* Actually allocate an array to keep track of the sections */
+    int relocationCount = 0;
+    char** sectionMapping = NULL;
     sectionMapping = (char**)calloc(sizeof(char*)*(coff_header_ptr->NumberOfSections+1), 1);
 #ifdef DEBUG
     sectionSize = (int*)calloc(sizeof(int)*(coff_header_ptr->NumberOfSections+1), 1);
@@ -605,12 +607,13 @@ int RunCOFF(char* functionname, unsigned char* coff_data, uint32_t filesize, uns
     DEBUG_PRINT("Back\n");
 
     /* Cleanup the allocated memory */
-#ifdef _WIN32
     cleanup :
             if (sectionMapping){
                 for (tempcounter = 0; tempcounter < coff_header_ptr->NumberOfSections; tempcounter++) {
                     if (sectionMapping[tempcounter]) {
+#ifdef _WIN32
                         VirtualFree(sectionMapping[tempcounter], 0, MEM_RELEASE);
+#endif
                     }
                 }
                 free(sectionMapping);
@@ -622,6 +625,7 @@ int RunCOFF(char* functionname, unsigned char* coff_data, uint32_t filesize, uns
                 sectionSize = NULL;
             }
 #endif
+#ifdef _WIN32
             if (functionMapping){
                 VirtualFree(functionMapping, 0, MEM_RELEASE);
             }
