@@ -13,8 +13,6 @@
 #if defined(_WIN32)
 #include <windows.h>
 #include "beacon_compatibility.h"
-#else
-unsigned char* InternalFunctions[30][2];
 #endif
 
 #include "COFFLoader.h"
@@ -133,7 +131,11 @@ void* process_symbol(char* symbolstring) {
         if(strcmp(symbolstring, "__C_specific_handler") == 0)
         {
             localfunc = symbolstring;
+#if defined(_WIN32)
             return InternalFunctions[29][1];
+#else
+            return NULL;
+#endif
         }
         else
         {
@@ -586,10 +588,11 @@ int RunCOFF(char* functionname, unsigned char* coff_data, uint32_t filesize, uns
         if (strcmp(coff_sym_ptr[tempcounter].first.Name, entryfuncname) == 0) {
             DEBUG_PRINT("\t\tFound entry!\n");
 
+#ifdef _WIN32
             // VirtualProtect PAGE_EXECUTE_READ the section where the actual function to exec is located.
             DWORD oldProtection=0;
             VirtualProtect(sectionMapping[coff_sym_ptr[tempcounter].SectionNumber - 1], sectionSize[coff_sym_ptr[tempcounter].SectionNumber - 1], PAGE_EXECUTE_READ, &oldProtection);
-#ifdef _WIN32
+
             /* So for some reason VS 2017 doesn't like this, but char* casting works, so just going to do that */
 #ifdef _MSC_VER
             foo = (void(__cdecl*)(char*, unsigned long))(sectionMapping[coff_sym_ptr[tempcounter].SectionNumber - 1] + coff_sym_ptr[tempcounter].Value);
