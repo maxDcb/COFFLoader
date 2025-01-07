@@ -14,4 +14,5 @@ COFFLoader.c
 )
 
 add_library(${PROJECT_NAME} STATIC ${SOURCE_FILES})
+set_property(TARGET ${PROJECT_NAME} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
 target_include_directories(${PROJECT_NAME} PUBLIC ./)
