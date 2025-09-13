@@ -16,3 +16,25 @@ COFFLoader.c
 add_library(${PROJECT_NAME} STATIC ${SOURCE_FILES})
 set_property(TARGET ${PROJECT_NAME} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
 target_include_directories(${PROJECT_NAME} PUBLIC ./)
+
+
+# --- Executable: COFFLoader64.exe ---
+add_executable(COFFLoader64
+    beacon_compatibility.c
+    COFFLoader.c
+)
+
+target_compile_definitions(COFFLoader64 PRIVATE
+    COFF_STANDALONE
+    RELEASE
+)
+
+# --- Object file: test64.out ---
+# This builds test.c to an object file, not a full exe.
+add_library(test64 OBJECT test.c)
+# Rename the object to test64.out instead of default name.
+set_target_properties(test64 PROPERTIES
+    OUTPUT_NAME "test64"
+    SUFFIX ".out"
+)
+
