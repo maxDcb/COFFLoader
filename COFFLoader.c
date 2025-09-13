@@ -109,7 +109,7 @@ unsigned char* getContents(char* filepath, uint32_t* outsize) {
     return buffer;
 }
 
-static BOOL starts_with(const char* string, const char* substring) {
+static int starts_with(const char* string, const char* substring) {
     return strncmp(string, substring, strlen(substring)) == 0;
 }
 
@@ -135,7 +135,11 @@ void* process_symbol(char* symbolstring) {
         if(strcmp(symbolstring, "__C_specific_handler") == 0)
         {
             localfunc = symbolstring;
+#if defined(_WIN32)
             return InternalFunctions[29][1];
+#else
+            return NULL;
+#endif
         }
         else
         {
@@ -244,19 +248,14 @@ int RunCOFF(char* functionname, unsigned char* coff_data, uint32_t filesize, uns
     }
     (void)sprintf(entryfuncname, "_%s", functionname);
 #endif
+#ifdef _WIN32
     HMODULE kern = GetModuleHandleA("kernel32.dll");
     InternalFunctions[29][1] = (unsigned char *) GetProcAddress(kern, "__C_specific_handler");
     DEBUG_PRINT("found address of %x\n", InternalFunctions[29][1]);
-#ifdef _WIN32
     /* NOTE: I just picked a size, look to see what is max/normal. */
-    char** sectionMapping = NULL;
-#ifdef DEBUG
-    int *sectionSize = NULL;
-#endif
     void(*foo)(char* in, unsigned long datalen);
     void **functionMapping = NULL;
     int functionMappingCount = 0;
-    int relocationCount = 0;
 #endif
     /* Buffer to hold the symbol short name if the symbol has no trailing NULL byte */
     char symbol_shortname_buffer[9] = {0};
@@ -270,10 +269,12 @@ int RunCOFF(char* functionname, unsigned char* coff_data, uint32_t filesize, uns
     DEBUG_PRINT("Characteristics: %d\n", coff_header_ptr->Characteristics);
     DEBUG_PRINT("\n");
     /* Actually allocate an array to keep track of the sections */
+    int relocationCount = 0;
+    char** sectionMapping = NULL;
     sectionMapping = (char**)calloc(sizeof(char*)*(coff_header_ptr->NumberOfSections+1), 1);
-#ifdef DEBUG
+    int *sectionSize = NULL;
     sectionSize = (int*)calloc(sizeof(int)*(coff_header_ptr->NumberOfSections+1), 1);
-#endif
+
     if (sectionMapping == NULL){
         DEBUG_PRINT("Failed to allocate sectionMapping\n");
         goto cleanup;
@@ -298,14 +299,11 @@ int RunCOFF(char* functionname, unsigned char* coff_data, uint32_t filesize, uns
         DEBUG_PRINT("Characteristics: %x\n", coff_sect_ptr->Characteristics);
 #ifdef _WIN32
         DEBUG_PRINT("Allocating 0x%x bytes\n", coff_sect_ptr->VirtualSize);
-        /* NOTE: Might want to allocate as PAGE_READWRITE and VirtualProtect
-         * before execution to either PAGE_READWRITE or PAGE_EXECUTE_READ
-         * depending on the Section Characteristics. Parse them all again
-         * before running and set the memory permissions. */
-        sectionMapping[counter] = VirtualAlloc(NULL, coff_sect_ptr->SizeOfRawData, MEM_COMMIT | MEM_RESERVE | MEM_TOP_DOWN, PAGE_EXECUTE_READWRITE);
-#ifdef DEBUG
+        
+        // VirtualAlloc PAGE_READWRITE to avoir RWX memory regions.
+        sectionMapping[counter] = VirtualAlloc(NULL, coff_sect_ptr->SizeOfRawData, MEM_COMMIT | MEM_RESERVE | MEM_TOP_DOWN, PAGE_READWRITE);
         sectionSize[counter] = coff_sect_ptr->SizeOfRawData;
-#endif
+
         if (sectionMapping[counter] == NULL) {
             DEBUG_PRINT("Failed to allocate memory\n");
         }
@@ -323,9 +321,9 @@ int RunCOFF(char* functionname, unsigned char* coff_data, uint32_t filesize, uns
     /* Actually allocate enough for worst case every relocation, may not be needed, but hey better safe than sorry */
 #ifdef _WIN32
 #ifdef _WIN64
-    functionMapping = (void **)VirtualAlloc(NULL, relocationCount*8, MEM_COMMIT | MEM_RESERVE | MEM_TOP_DOWN, PAGE_EXECUTE_READWRITE);
+    functionMapping = VirtualAlloc(NULL, relocationCount*8, MEM_COMMIT | MEM_RESERVE | MEM_TOP_DOWN, PAGE_READWRITE);
 #else
-    functionMapping = (void **)VirtualAlloc(NULL, relocationCount*8, MEM_COMMIT | MEM_RESERVE | MEM_TOP_DOWN, PAGE_EXECUTE_READWRITE);
+    functionMapping = VirtualAlloc(NULL, relocationCount*8, MEM_COMMIT | MEM_RESERVE | MEM_TOP_DOWN, PAGE_READWRITE);
 #endif
     if (functionMapping == NULL){
         DEBUG_PRINT("Failed to allocate functionMapping\n");
@@ -581,7 +579,12 @@ int RunCOFF(char* functionname, unsigned char* coff_data, uint32_t filesize, uns
         DEBUG_PRINT("\t%s: Section: %d, Value: 0x%X\n", coff_sym_ptr[tempcounter].first.Name, coff_sym_ptr[tempcounter].SectionNumber, coff_sym_ptr[tempcounter].Value);
         if (strcmp(coff_sym_ptr[tempcounter].first.Name, entryfuncname) == 0) {
             DEBUG_PRINT("\t\tFound entry!\n");
+
 #ifdef _WIN32
+            // VirtualProtect PAGE_EXECUTE_READ the section where the actual function to exec is located.
+            DWORD oldProtection=0;
+            VirtualProtect(sectionMapping[coff_sym_ptr[tempcounter].SectionNumber - 1], sectionSize[coff_sym_ptr[tempcounter].SectionNumber - 1], PAGE_EXECUTE_READ, &oldProtection);
+
             /* So for some reason VS 2017 doesn't like this, but char* casting works, so just going to do that */
 #ifdef _MSC_VER
             foo = (void(__cdecl*)(char*, unsigned long))(sectionMapping[coff_sym_ptr[tempcounter].SectionNumber - 1] + coff_sym_ptr[tempcounter].Value);
@@ -597,23 +600,23 @@ int RunCOFF(char* functionname, unsigned char* coff_data, uint32_t filesize, uns
     DEBUG_PRINT("Back\n");
 
     /* Cleanup the allocated memory */
-#ifdef _WIN32
     cleanup :
             if (sectionMapping){
                 for (tempcounter = 0; tempcounter < coff_header_ptr->NumberOfSections; tempcounter++) {
                     if (sectionMapping[tempcounter]) {
+#ifdef _WIN32
                         VirtualFree(sectionMapping[tempcounter], 0, MEM_RELEASE);
+#endif
                     }
                 }
                 free(sectionMapping);
                 sectionMapping = NULL;
             }
-#ifdef DEBUG
             if (sectionSize){
                 free(sectionSize);
                 sectionSize = NULL;
             }
-#endif
+#ifdef _WIN32
             if (functionMapping){
                 VirtualFree(functionMapping, 0, MEM_RELEASE);
             }
